@@ -723,7 +723,11 @@ async function executeSalaryCalculation(ctx: Ctx, actor: SalaryActor, payrollPer
     if (matching.length !== 1) { addException(row, "AMBIGUOUS_RATE", `${matching.length} effective rate rules share priority ${highest} for this payable quantity.`, "Supersede or deactivate overlapping rate rules so one rule wins."); continue; }
     const rate = matching[0]; if (!rate) continue;
     let unitRate: Decimal; let payable: Decimal; try { unitRate = new Decimal(rate.unitRate); payable = new Decimal(row.employeeAllocatedQuantity); } catch { addException(row, "INVALID_RATE", "The applied rate or payable quantity is not a valid decimal.", "Correct the configured rate or reconciliation quantity."); continue; }
-    if (unitRate.isNegative() || payable.isNegative()) { addException(row, "NEGATIVE_VALUE", "Negative rates or payable quantities are not authorized.", "Use a separately authorized adjustment for deductions; correct the rate or quantity."); continue; }
+    const isDeductionCategory = Boolean(
+      (row.categoryCode && (row.categoryCode.toLowerCase().includes("proof(-)") || row.categoryCode.toLowerCase().includes("proof_minus"))) ||
+      (row.categoryName && row.categoryName.toLowerCase().includes("proof (-)"))
+    );
+    if ((unitRate.isNegative() && !isDeductionCategory) || payable.isNegative()) { addException(row, "NEGATIVE_VALUE", "Negative rates or payable quantities are not authorized.", "Use a separately authorized adjustment for deductions; correct the rate or quantity."); continue; }
     if (payable.isZero()) continue;
     let multiplier = new Decimal(1); let gross = rate.ruleType === "fixed" ? unitRate : payable.times(unitRate);
     const useSlab = rate.ruleType === "slab" || (projectSlabActive && rate.ruleType !== "fixed");
@@ -2153,7 +2157,7 @@ export const Actions = {
         if (cLower === "doctype" && !isDocType) return false;
         if ((cLower === "proof (+)" || cLower === "proof (-)" || cLower.includes("proof")) && !isProof) return false;
         if (cLower.includes("incentive") && !isInc) return false;
-        return true;
+        return types.some((t) => t.toLowerCase() === cLower);
       });
 
       return {

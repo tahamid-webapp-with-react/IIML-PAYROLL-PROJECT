@@ -102,13 +102,17 @@ const emptyProject: ProjectDraft = {
   characterTypes: ["Header Character", "Date Character"],
 };
 
-const NAV: Array<{ group: string; icon: string; items: Array<{ key: PageKey; label: string; icon: string; stage: 1 | 2 | 3 | 4 | 5 | 6 | "planned" }> }> = [
+const NAV: Array<{
+  group: string;
+  icon: string;
+  directPage?: PageKey;
+  items: Array<{ key: PageKey; label: string; icon: string; stage: 1 | 2 | 3 | 4 | 5 | 6 | "planned" }>;
+}> = [
   {
-    group: "Dashboard and Overview",
+    group: "Dashboard & Overview",
     icon: "database",
-    items: [
-      { key: "dashboard", label: "Dashboard", icon: "database", stage: 1 },
-    ],
+    directPage: "dashboard",
+    items: [],
   },
   {
     group: "Project Control and Configuration",
@@ -613,6 +617,29 @@ export function App() {
 
         <nav aria-label="Primary navigation">
           {NAV.map((group) => {
+            if (group.directPage) {
+              const isActive = page === group.directPage;
+              return (
+                <div className="nav-group" key={group.group}>
+                  <button
+                    type="button"
+                    className={`nav-group-header direct-nav-btn ${isActive ? "active open" : ""}`}
+                    onClick={() => go(group.directPage!)}
+                    title={group.group}
+                    style={{
+                      cursor: "pointer",
+                      background: isActive ? "rgba(15, 91, 74, 0.45)" : "transparent",
+                      color: isActive ? "#ffffff" : "#8bbcb0",
+                    }}
+                  >
+                    <div className="group-title-wrap">
+                      <Icon name={group.icon} />
+                      {!collapsed && <span>{group.group}</span>}
+                    </div>
+                  </button>
+                </div>
+              );
+            }
             const isOpen = openGroup === group.group;
             return (
               <div className="nav-group" key={group.group}>
@@ -1335,6 +1362,7 @@ const DEFAULT_DOC_CATEGORIES = [
   "Date Character",
   "Birth Character",
   "Marriage Character",
+  "Death Character",
   "Review Key",
   "Header",
 ];
@@ -3378,29 +3406,6 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
     setEditRuleType((r.ruleType as any) || "unit-rate");
   };
 
-  const applyPreset = (preset: "standard" | "slab" | "fixed") => {
-    if (preset === "standard") {
-      setFormRuleType("unit-rate");
-      setFormUnitRate("0.0225");
-      setFormPriority(100);
-      if (!clonedFromRule) setFormRuleName("Standard Production Unit Rate");
-    } else if (preset === "slab") {
-      setFormRuleType("slab");
-      setFormUnitRate("0.0225");
-      setFormThresholdLow("3.99");
-      setFormThresholdHigh("5.99");
-      setFormMultiplierLow("0.60");
-      setFormMultiplierMid("0.80");
-      setFormMultiplierHigh("1.00");
-      setFormPriority(100);
-      if (!clonedFromRule) setFormRuleName("Production Standard 3-Tier Slab Rate");
-    } else if (preset === "fixed") {
-      setFormRuleType("fixed");
-      setFormUnitRate("5000.00");
-      setFormPriority(50);
-      if (!clonedFromRule) setFormRuleName("Fixed Monthly Retainer");
-    }
-  };
 
   const openNewRateRuleModal = () => {
     setClonedFromRule(null);
@@ -3485,6 +3490,26 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
   const activeCountries = config.data?.countries || [];
   const activeWorkTypes = config.data?.workTypes || [];
   const activeCategories = config.data?.categories || [];
+
+  const projectCountryList = useMemo(() => {
+    const list: string[] = [];
+    if (config.data?.project?.countries && Array.isArray(config.data.project.countries)) {
+      list.push(...config.data.project.countries);
+    }
+    for (const c of activeCountries) {
+      if (!list.includes(c.countryCode)) list.push(c.countryCode);
+    }
+    return list.length > 0 ? list : ["BD"];
+  }, [config.data?.project?.countries, activeCountries]);
+
+  const [activeCountryTab, setActiveCountryTab] = useState<string>("BD");
+  const [countryDraftRates, setCountryDraftRates] = useState<Record<string, Record<string, string>>>({});
+
+  useEffect(() => {
+    if (projectCountryList.length > 0 && !projectCountryList.includes(activeCountryTab)) {
+      setActiveCountryTab(projectCountryList[0] || "BD");
+    }
+  }, [projectCountryList, activeCountryTab]);
 
   const uniqueCountries = Array.from(new Set(rateRules.map((r) => r.countryCode))).filter(Boolean);
 
@@ -3764,11 +3789,11 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
               type="button"
               className="primary-button compact"
               onClick={openCategoryRatesModal}
-              title="Set rates for Header Character, Birth Character, Marriage Character, Date Character, etc."
+              title="Set rates for Header Character, Birth Character, Marriage Character, Death Character, Proof (+/-), etc."
               style={{ background: "#0f766e", borderColor: "#0d5f58" }}
             >
               <Icon name="tag" />
-              <span>Category Rates (হেডার / বার্থ / ম্যারেজ)</span>
+              <span>Category Rates Matrix</span>
             </button>
           )}
           {canManage && (
@@ -3813,105 +3838,294 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
         </article>
       </div>
 
-      {/* CATEGORY RATES OVERVIEW CARDS (Header Character, Birth Character, Marriage Character, etc.) */}
-      <div className="category-rates-strip" style={{ marginTop: 14, marginBottom: 4 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+      {/* 3. COUNTRY-WISE RATE CONFIGURATION (Only shows options enabled on the selected project) */}
+      <div className="category-rates-strip" style={{ marginTop: 14, marginBottom: 14, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
           <div>
-            <strong style={{ fontSize: "13px", color: "var(--accent-deep)" }}>
-              Record & Character Category Rates (ক্যাটাগরি অনুযায়ী রেট)
-            </strong>
-            <p style={{ margin: "2px 0 0", fontSize: "11.5px", color: "var(--dim)" }}>
-              Rates configured for specific record / character types (Header Character, Birth Character, Marriage Character, etc.) take priority over general base rates during salary calculation.
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: "#0f766e", display: "flex" }}>
+                <Icon name="calculator" />
+              </span>
+              <strong style={{ fontSize: "14px", color: "var(--accent-deep)" }}>
+                Country-Wise Rate Configuration
+              </strong>
+            </div>
+            <p style={{ margin: "3px 0 0", fontSize: "12px", color: "var(--dim)" }}>
+              Configure unit rates per country. Only features enabled for <b>{currentProject?.projectId || "this project"}</b> (Character types, Proof (+/-), DocType, Incentives) are available.
             </p>
           </div>
           {canManage && (
-            <button
-              type="button"
-              className="secondary-button compact"
-              style={{ fontSize: "11.5px", padding: "3px 10px" }}
-              onClick={openCategoryRatesModal}
-            >
-              <Icon name="pencil" />
-              <span>Configure Category Rates Matrix</span>
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="secondary-button compact"
+                style={{ fontSize: "11.5px", padding: "4px 10px" }}
+                onClick={openCategoryRatesModal}
+              >
+                <Icon name="pencil" />
+                <span>Open Matrix Modal</span>
+              </button>
+            </div>
           )}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
-          {(activeCategories.length > 0 ? activeCategories : [
-            { id: -1, name: "Header Character", code: "HEADER_CHAR" },
-            { id: -2, name: "Birth Character", code: "BIRTH_CHAR" },
-            { id: -3, name: "Marriage Character", code: "MARRIAGE_CHAR" },
-            { id: -4, name: "Date Character", code: "DATE_CHAR" },
-            { id: -5, name: "Review Key", code: "REVIEW_KEY" },
-            { id: -6, name: "Header", code: "HEADER" },
-          ]).map((cat) => {
-            const activeRule = rateRules.find((r) => r.status === "active" && (r.categoryId === cat.id || r.categoryName === cat.name));
+        {/* Country Selector Tabs */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 16, flexWrap: "wrap", borderBottom: "1px solid var(--border)", paddingBottom: 10 }}>
+          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--dim)", marginRight: 6 }}>
+            Select Country:
+          </span>
+          {projectCountryList.map((cCode) => {
+            const isSelected = activeCountryTab === cCode;
+            const countryRules = rateRules.filter((r) => r.status === "active" && r.countryCode === cCode);
+            return (
+              <button
+                key={cCode}
+                type="button"
+                onClick={() => setActiveCountryTab(cCode)}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: "12.5px",
+                  fontWeight: isSelected ? 800 : 600,
+                  borderRadius: "6px",
+                  border: isSelected ? "1.5px solid #0f766e" : "1px solid var(--border)",
+                  background: isSelected ? "#0f766e" : "var(--surface)",
+                  color: isSelected ? "#ffffff" : "var(--text)",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <span>{cCode}</span>
+                <span
+                  style={{
+                    fontSize: "10.5px",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                    background: isSelected ? "rgba(255,255,255,0.25)" : "var(--surface-alt)",
+                    color: isSelected ? "#fff" : "var(--dim)",
+                    fontWeight: 700,
+                  }}
+                >
+                  {countryRules.length} set
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Rates Grid for activeCountryTab */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+          {/* Base Work Type Rate */}
+          {(() => {
+            const baseRule = rateRules.find((r) => r.status === "active" && r.countryCode === activeCountryTab && r.categoryId === null);
+            const draftVal = countryDraftRates[activeCountryTab]?.["base"] ?? "";
+            const currentVal = draftVal !== "" ? draftVal : (baseRule?.unitRate || "");
             return (
               <div
-                key={cat.id}
-                className="category-rate-card"
                 style={{
-                  border: activeRule ? "1px solid #99c2b6" : "1px dashed var(--border)",
-                  background: activeRule ? "#f0fdf9" : "var(--surface)",
-                  padding: "10px 12px",
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
                   borderRadius: 6,
+                  padding: "12px",
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  gap: 6,
+                  gap: 8,
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
-                  <strong style={{ fontSize: "12px", color: "var(--text)" }}>{cat.name}</strong>
-                  {activeRule ? (
-                    <span className="mono" style={{ fontSize: "10px", padding: "1px 5px", background: "#ccfbf1", color: "#0f766e", borderRadius: 3, fontWeight: 700 }}>
-                      {activeRule.countryCode}
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <strong style={{ fontSize: "12.5px", color: "var(--text)" }}>Base Unit Rate</strong>
+                    <span style={{ fontSize: "10.5px", padding: "1px 6px", background: "#e0f2fe", color: "#0369a1", borderRadius: 3, fontWeight: 700 }}>
+                      General
                     </span>
-                  ) : (
-                    <span style={{ fontSize: "10px", color: "var(--dim)" }}>Not set</span>
-                  )}
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 2 }}>
-                  <div>
-                    <span className="mono" style={{ fontSize: "14px", fontWeight: 800, color: activeRule ? "#073b33" : "var(--dim)" }}>
-                      {activeRule ? activeRule.unitRate : "—"}
-                    </span>
-                    <small style={{ display: "block", fontSize: "10px", color: "var(--dim)" }}>
-                      {activeRule ? `${activeRule.ruleType}` : "Inherits general rate"}
-                    </small>
                   </div>
-                  {canManage && (
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      style={{ fontSize: "11px", padding: "2px 6px", height: "auto" }}
-                      onClick={() => {
-                        if (cat.id > 0) {
-                          setFormCategoryId(cat.id);
-                          setFormRuleName(`${activeRule?.countryCode || "BD"} - ${cat.name} Rate`);
-                          if (activeRule) {
-                            setFormUnitRate(activeRule.unitRate);
-                            setFormCountryCode(activeRule.countryCode);
-                            setFormWorkTypeId(activeRule.workTypeId);
-                          } else {
-                            setFormCountryCode(config.data?.countries.find((c) => c.status === "active")?.countryCode || "BD");
-                            setFormWorkTypeId(config.data?.workTypes.find((w) => w.status === "active")?.id || "");
-                          }
-                          setCreateModal(true);
-                        } else {
-                          openCategoryRatesModal();
-                        }
-                      }}
-                    >
-                      {activeRule ? "Update" : "Set Rate"}
-                    </button>
-                  )}
+                  <small style={{ fontSize: "11px", color: "var(--dim)", display: "block", marginTop: 2 }}>
+                    Base rate for {currentProject?.paymentBasis || "record"} entries in {activeCountryTab}
+                  </small>
+                </div>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--dim)", marginBottom: 4 }}>
+                    <span>Active: <b className="mono" style={{ color: baseRule ? "#073b33" : "var(--dim)" }}>{baseRule ? baseRule.unitRate : "Not set"}</b></span>
+                  </div>
+                  <input
+                    inputMode="decimal"
+                    placeholder="e.g. 0.0225"
+                    disabled={!canManage}
+                    value={currentVal}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCountryDraftRates((prev) => ({
+                        ...prev,
+                        [activeCountryTab]: { ...(prev[activeCountryTab] || {}), base: val },
+                      }));
+                    }}
+                    style={{ fontSize: "13px", padding: "6px 8px", width: "100%", fontFamily: "var(--mono)", fontWeight: 700 }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Enabled Categories (Character types, Proof (+), Proof (-), DocType, Incentive) */}
+          {activeCategories.map((cat) => {
+            const activeRule = rateRules.find(
+              (r) => r.status === "active" && r.countryCode === activeCountryTab && (r.categoryId === cat.id || r.categoryName === cat.name)
+            );
+            const isProofMinus = cat.name.toLowerCase().includes("proof (-)");
+            const isProofPlus = cat.name.toLowerCase().includes("proof (+)");
+            const isDocTypeCat = cat.name.toLowerCase() === "doctype";
+            const isIncentiveCat = cat.name.toLowerCase().includes("incentive");
+
+            const draftVal = countryDraftRates[activeCountryTab]?.[String(cat.id)] ?? "";
+            const currentVal = draftVal !== "" ? draftVal : (activeRule?.unitRate || "");
+
+            let badgeColor = "#e8f3ef";
+            let badgeTextColor = "#073b33";
+            let badgeText = "Character";
+            if (isProofPlus) {
+              badgeColor = "#dcfce7";
+              badgeTextColor = "#15803d";
+              badgeText = "Proof (+)";
+            } else if (isProofMinus) {
+              badgeColor = "#fee2e2";
+              badgeTextColor = "#b91c1c";
+              badgeText = "Proof (-)";
+            } else if (isDocTypeCat) {
+              badgeColor = "#fef3c7";
+              badgeTextColor = "#92400e";
+              badgeText = "DocType";
+            } else if (isIncentiveCat) {
+              badgeColor = "#f3e8ff";
+              badgeTextColor = "#6b21a8";
+              badgeText = "Incentive";
+            }
+
+            return (
+              <div
+                key={cat.id}
+                style={{
+                  background: isProofMinus ? "#fffbfb" : isProofPlus ? "#fbfdfb" : "var(--surface)",
+                  border: isProofMinus ? "1px solid #fca5a5" : isProofPlus ? "1px solid #86efac" : "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <strong style={{ fontSize: "12.5px", color: "var(--text)" }}>{cat.name}</strong>
+                    <span style={{ fontSize: "10.5px", padding: "1px 6px", background: badgeColor, color: badgeTextColor, borderRadius: 3, fontWeight: 700 }}>
+                      {badgeText}
+                    </span>
+                  </div>
+                  <small style={{ fontSize: "11px", color: "var(--dim)", display: "block", marginTop: 2 }}>
+                    {isProofMinus
+                      ? "Granular Proof deduction adjustment rate (can be negative)"
+                      : isProofPlus
+                        ? "Granular Proof positive adjustment rate"
+                        : `${cat.name} unit rate for ${activeCountryTab}`}
+                  </small>
+                </div>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--dim)", marginBottom: 4 }}>
+                    <span>Active: <b className="mono" style={{ color: activeRule ? (isProofMinus ? "#b91c1c" : "#073b33") : "var(--dim)" }}>{activeRule ? activeRule.unitRate : "Not set"}</b></span>
+                    <span className="mono" style={{ fontSize: "10.5px" }}>{cat.code}</span>
+                  </div>
+                  <input
+                    inputMode="decimal"
+                    placeholder={isProofMinus ? "e.g. -0.0150" : "e.g. 0.0250"}
+                    disabled={!canManage}
+                    value={currentVal}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCountryDraftRates((prev) => ({
+                        ...prev,
+                        [activeCountryTab]: { ...(prev[activeCountryTab] || {}), [String(cat.id)]: val },
+                      }));
+                    }}
+                    style={{
+                      fontSize: "13px",
+                      padding: "6px 8px",
+                      width: "100%",
+                      fontFamily: "var(--mono)",
+                      fontWeight: 700,
+                      color: isProofMinus && currentVal.startsWith("-") ? "#b91c1c" : undefined,
+                    }}
+                  />
                 </div>
               </div>
             );
           })}
         </div>
+
+        {/* Save Bar for activeCountryTab */}
+        {canManage && (
+          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginTop: 14, paddingTop: 10, borderTop: "1px solid var(--border)", gap: 10 }}>
+            <span style={{ fontSize: "12px", color: "var(--dim)" }}>
+              Applying updates to <b>{activeCountryTab}</b>
+            </span>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={saveCategoryMutation.isPending}
+              onClick={() => {
+                const ratesToSave: { categoryId: number | null; unitRate: string; ruleType: "unit-rate"; ruleName?: string }[] = [];
+                // Save category rates
+                activeCategories.forEach((cat) => {
+                  const draftVal = countryDraftRates[activeCountryTab]?.[String(cat.id)];
+                  const activeRule = rateRules.find(
+                    (r) => r.status === "active" && r.countryCode === activeCountryTab && (r.categoryId === cat.id || r.categoryName === cat.name)
+                  );
+                  const effectiveVal = draftVal !== undefined ? draftVal.trim() : (activeRule?.unitRate || "");
+                  if (effectiveVal && !isNaN(Number(effectiveVal))) {
+                    ratesToSave.push({
+                      categoryId: cat.id,
+                      unitRate: effectiveVal,
+                      ruleType: "unit-rate",
+                      ruleName: `${activeCountryTab} - ${cat.name} Rate`,
+                    });
+                  }
+                });
+                // Save base rate
+                const draftBase = countryDraftRates[activeCountryTab]?.["base"];
+                const baseRule = rateRules.find((r) => r.status === "active" && r.countryCode === activeCountryTab && r.categoryId === null);
+                const effectiveBase = draftBase !== undefined ? draftBase.trim() : (baseRule?.unitRate || "");
+                if (effectiveBase && !isNaN(Number(effectiveBase))) {
+                  ratesToSave.push({
+                    categoryId: null,
+                    unitRate: effectiveBase,
+                    ruleType: "unit-rate",
+                    ruleName: `${activeCountryTab} - Base ${currentProject?.paymentBasis || "Record"} Rate`,
+                  });
+                }
+
+                if (ratesToSave.length === 0) {
+                  notify({ kind: "error", text: "Please enter at least one valid rate before saving." });
+                  return;
+                }
+
+                saveCategoryMutation.mutate({
+                  token,
+                  projectId: projectId!,
+                  countryCode: activeCountryTab,
+                  workTypeId: Number(activeWorkTypes[0]?.id || 1),
+                  effectiveFrom: todayIso,
+                  effectiveTo: null,
+                  rates: ratesToSave,
+                });
+              }}
+            >
+              <Icon name="check" />
+              <span>{saveCategoryMutation.isPending ? "Saving..." : `Save Rates for ${activeCountryTab}`}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 3. MAIN DATA TABLE */}
@@ -4107,37 +4321,6 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
             </div>
           )}
 
-          <div style={{ marginBottom: 14 }}>
-            <span style={{ fontSize: "12px", fontWeight: 650, color: "var(--dim)", display: "block", marginBottom: 6 }}>
-              Quick Preset Templates:
-            </span>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className={`secondary-button compact ${formRuleType === "slab" ? "is-selected" : ""}`}
-                style={{ fontSize: "11.5px", padding: "4px 10px" }}
-                onClick={() => applyPreset("slab")}
-              >
-                3-Tier Productivity Slab (0.60× / 0.80× / 1.00×)
-              </button>
-              <button
-                type="button"
-                className={`secondary-button compact ${formRuleType === "unit-rate" ? "is-selected" : ""}`}
-                style={{ fontSize: "11.5px", padding: "4px 10px" }}
-                onClick={() => applyPreset("standard")}
-              >
-                Standard Linear Unit Rate ($0.0225)
-              </button>
-              <button
-                type="button"
-                className={`secondary-button compact ${formRuleType === "fixed" ? "is-selected" : ""}`}
-                style={{ fontSize: "11.5px", padding: "4px 10px" }}
-                onClick={() => applyPreset("fixed")}
-              >
-                Fixed Lump-Sum ($5,000.00)
-              </button>
-            </div>
-          </div>
 
           <form
             className="form-grid"
@@ -4242,7 +4425,7 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
 
             <div className="full" style={{ marginBottom: 2 }}>
               <span style={{ fontSize: "11.5px", fontWeight: 650, color: "var(--dim)", display: "block", marginBottom: 6 }}>
-                Quick Select Category (হেডার / বার্থ / ম্যারেজ ক্যারেক্টার):
+                Quick Select Category (Header / Birth / Marriage / Death Character):
               </span>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {activeCategories.map((c) => {
@@ -5393,7 +5576,7 @@ function RateRules({ token, permissions, notify }: { token: string; permissions:
       {/* CATEGORY RATES MATRIX SETUP MODAL */}
       {categoryModalOpen && projectId && (
         <Modal
-          title="Set Category Rates (হেডার / বার্থ / ম্যারেজ ক্যারেক্টার রেট)"
+          title="Set Category Rates (Header / Birth / Marriage / Death Character)"
           onClose={() => setCategoryModalOpen(false)}
           wide
         >

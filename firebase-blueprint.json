@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information synchronized with Firebase Authentication.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth user identifier."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Avatar or photo URL."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "payroll-manager", "operator", "auditor"],
+          "description": "Assigned access control role."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user document was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user document was last updated."
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "ProjectSync": {
+      "title": "ProjectSync",
+      "description": "High-level metadata of configured payroll projects.",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "description": "Unique project identifier code."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the project."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive", "archived"],
+          "description": "Current status of the project."
+        },
+        "countries": {
+          "type": "array",
+          "description": "List of active country codes."
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "UID of the user who last modified the project."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the last update."
+        }
+      },
+      "required": ["projectId", "name", "status", "updatedAt"]
+    },
+    "AuditLogSync": {
+      "title": "AuditLogSync",
+      "description": "Immutable security and action audit event log record.",
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "description": "Unique event identifier."
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the actor who performed the action."
+        },
+        "action": {
+          "type": "string",
+          "description": "Action name or operation."
+        },
+        "entityType": {
+          "type": "string",
+          "description": "Entity category affected."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the event."
+        }
+      },
+      "required": ["eventId", "userId", "action", "entityType", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Collection of user profile and permission documents."
+    },
+    "/projects/{projectId}": {
+      "schema": "ProjectSync",
+      "description": "Synced project catalog and configuration records."
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLogSync",
+      "description": "Tamper-resistant audit log records."
+    }
+  }
+}

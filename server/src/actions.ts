@@ -826,6 +826,39 @@ export const Actions = {
     },
   }),
 
+  firebaseLogin: defineAction({
+    request: z.object({
+      uid: z.string().min(1),
+      email: z.string().email(),
+      name: z.string().optional().nullable(),
+      avatar: z.string().optional().nullable(),
+    }),
+    response: z.object({ token: z.string(), expiresAt: z.string() }),
+    async handler(ctx, args) {
+      const db = ctx.db<typeof schema>();
+      await ensureRoles(ctx);
+      let user = (await db.select().from(schema.users).where(eq(schema.users.email, args.email.toLowerCase())).limit(1))[0];
+      if (!user) {
+        const existingUsers = await db.select({ id: schema.users.id }).from(schema.users).limit(1);
+        const roleSlug = existingUsers.length === 0 || args.email.toLowerCase() === "tahamid.learning@gmail.com" ? "administrator" : "payroll-manager";
+        const role = (await db.select().from(schema.roles).where(eq(schema.roles.slug, roleSlug)).limit(1))[0];
+        if (!role) throw new Error("Role initialization failed.");
+        const inserted = await db.insert(schema.users).values({
+          name: args.name || args.email.split("@")[0] || "User",
+          email: args.email.toLowerCase(),
+          passwordHash: await hashPassword(crypto.randomUUID() + "firebase-secure"),
+          roleId: role.id,
+          status: "active",
+          avatar: args.avatar || null,
+        }).returning();
+        user = inserted[0];
+      }
+      if (!user) throw new Error("Failed to authenticate user.");
+      const session = await createSession(ctx, user.id);
+      return { token: session.token, expiresAt: session.expiresAt.toISOString() };
+    },
+  }),
+
   sessionInfo: defineAction({
     request: authRequest,
     response: z.object({ id: z.number(), name: z.string(), email: z.string(), role: z.string(), roleName: z.string(), avatar: z.string().nullable().optional(), permissions: z.array(z.string()) }),

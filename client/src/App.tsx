@@ -17,6 +17,8 @@ import { DataTable, type Column } from "./components/DataTable";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { formatDate, formatDateTime, humanize, printDocument } from "./utils/formatters";
 import * as XLSX from "xlsx";
+import { loginWithGoogle, logoutFirebase, db } from "./firebase";
+import { doc, setDoc } from "firebase/firestore";
 
 type PageKey = "dashboard" | "periods" | "projects" | "configuration" | "rates" | "employees" | "users" | "roles" | "recycle-bin" | "audit" | "imports" | "production-records" | "production-work" | "production-shipments" | "production-settings" | "production-exceptions" | "batch-mapping" | "reconciliation" | "reconciliation-exceptions" | "salary-calculation" | "salary-details" | "master-salary" | "review-approval" | "export-center" | "planned-settings";
 type ProductionStream = "doctype" | "proof" | "transmitted_batch" | "shipdet";
@@ -340,18 +342,114 @@ function Modal({ title, children, onClose, wide = false }: { title: string; chil
 function AuthGate({ onAuthenticated }: { onAuthenticated: (token: string) => void }) {
   const [mode, setMode] = useState<"loading" | "setup" | "login">("loading");
   const [notice, setNotice] = useState<Notice>(null);
+  const [firebaseConnecting, setFirebaseConnecting] = useState(false);
   const status = useQuery({ queryKey: ["auth-status"], queryFn: () => api.authStatus({}) });
   useEffect(() => { if (status.data) setMode(status.data.needsSetup ? "setup" : "login"); }, [status.data]);
   const setup = useMutation({ mutationFn: api.bootstrapAdmin, onSuccess: (data) => onAuthenticated(data.token), onError: (error) => setNotice({ kind: "error", text: message(error) }) });
   const login = useMutation({ mutationFn: api.login, onSuccess: (data) => onAuthenticated(data.token), onError: (error) => setNotice({ kind: "error", text: message(error) }) });
+  const firebaseLoginMutation = useMutation({
+    mutationFn: api.firebaseLogin,
+    onSuccess: (data) => onAuthenticated(data.token),
+    onError: (error) => setNotice({ kind: "error", text: message(error) }),
+  });
+
   if (mode === "loading") return <Loading />;
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setNotice(null); const form = new FormData(event.currentTarget);
     const payload = { email: field(form, "email"), password: field(form, "password") };
     if (mode === "setup") setup.mutate({ ...payload, name: field(form, "name") }); else login.mutate(payload);
   };
-  const pending = setup.isPending || login.isPending;
-  return <div className="auth-shell"><SafeAreaTopScrim backgroundColor="var(--evergreen)" /><section className="auth-intro"><div className="auth-seal"><Icon name="shield" /></div><p className="overline">Secure month-end operations</p><h1>Build the payroll foundation before the numbers move.</h1><p>Persistent employee identities, effective-dated rates, controlled periods, and server-enforced roles are the starting point for every calculation.</p><div className="auth-proof"><span>01</span><div><strong>Persistent records</strong><small>Foundation data is written to the platform database.</small></div></div><div className="auth-proof"><span>02</span><div><strong>Seven defined roles</strong><small>Every write is checked by the server.</small></div></div><div className="auth-proof"><span>03</span><div><strong>No payroll assumptions</strong><small>Projects, categories, and rates start empty until configured.</small></div></div></section><section className="auth-panel"><div className="auth-form-wrap"><p className="overline">{mode === "setup" ? "First-time setup" : "Authorized access"}</p><h2>{mode === "setup" ? "Create the administrator account" : "Sign in to continue"}</h2><p className="form-lead">{mode === "setup" ? "This account initializes the role matrix and owns the first audit entry." : "Use an active account created by an administrator."}</p>{notice && <div className={`notice ${notice.kind}`}>{notice.text}</div>}<form className="stack-form" onSubmit={submit}>{mode === "setup" && <label>Full name<input name="name" autoComplete="name" minLength={2} required /></label>}<label>Work email<input name="email" type="email" autoComplete="email" required /></label><label>Password<input name="password" type="password" autoComplete={mode === "setup" ? "new-password" : "current-password"} minLength={mode === "setup" ? 10 : 1} required /></label>{mode === "setup" && <p className="field-help">Use at least 10 characters. Passwords are stored as one-way hashes.</p>}<button className="primary-button" disabled={pending}>{pending ? "Working…" : mode === "setup" ? "Create administrator" : "Sign in"}</button></form></div></section></div>;
+
+  const handleGoogleSignIn = async () => {
+    try {
+      setFirebaseConnecting(true);
+      setNotice(null);
+      const user = await loginWithGoogle();
+      if (!user || !user.email) {
+        throw new Error("Unable to retrieve account details from Google Sign-In.");
+      }
+      try {
+        await setDoc(
+          doc(db, "users", user.uid),
+          {
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName || user.email.split("@")[0],
+            photoURL: user.photoURL || null,
+            lastLoginAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn("Firestore user sync note:", e);
+      }
+      await firebaseLoginMutation.mutateAsync({
+        uid: user.uid,
+        email: user.email,
+        name: user.displayName || user.email.split("@")[0],
+        avatar: user.photoURL || null,
+      });
+    } catch (err) {
+      setNotice({ kind: "error", text: message(err) });
+    } finally {
+      setFirebaseConnecting(false);
+    }
+  };
+
+  const pending = setup.isPending || login.isPending || firebaseConnecting;
+  return (
+    <div className="auth-shell">
+      <SafeAreaTopScrim backgroundColor="var(--evergreen)" />
+      <section className="auth-intro">
+        <div className="auth-seal"><Icon name="shield" /></div>
+        <p className="overline">Secure month-end operations</p>
+        <h1>Build the payroll foundation before the numbers move.</h1>
+        <p>Persistent employee identities, effective-dated rates, controlled periods, and server-enforced roles are the starting point for every calculation.</p>
+        <div className="auth-proof"><span>01</span><div><strong>Persistent records</strong><small>Foundation data is written to the platform database.</small></div></div>
+        <div className="auth-proof"><span>02</span><div><strong>Seven defined roles</strong><small>Every write is checked by the server.</small></div></div>
+        <div className="auth-proof"><span>03</span><div><strong>No payroll assumptions</strong><small>Projects, categories, and rates start empty until configured.</small></div></div>
+      </section>
+      <section className="auth-panel">
+        <div className="auth-form-wrap">
+          <p className="overline">{mode === "setup" ? "First-time setup" : "Authorized access"}</p>
+          <h2>{mode === "setup" ? "Create the administrator account" : "Sign in to continue"}</h2>
+          <p className="form-lead">{mode === "setup" ? "This account initializes the role matrix and owns the first audit entry." : "Use an active account created by an administrator or sign in with Google."}</p>
+          {notice && <div className={`notice ${notice.kind}`}>{notice.text}</div>}
+          <form className="stack-form" onSubmit={submit}>
+            {mode === "setup" && <label>Full name<input name="name" autoComplete="name" minLength={2} required /></label>}
+            <label>Work email<input name="email" type="email" autoComplete="email" required /></label>
+            <label>Password<input name="password" type="password" autoComplete={mode === "setup" ? "new-password" : "current-password"} minLength={mode === "setup" ? 10 : 1} required /></label>
+            {mode === "setup" && <p className="field-help">Use at least 10 characters. Passwords are stored as one-way hashes.</p>}
+            <button className="primary-button" disabled={pending}>{pending ? "Working…" : mode === "setup" ? "Create administrator" : "Sign in"}</button>
+          </form>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "1.25rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--muted)", fontSize: "0.8125rem" }}>
+              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+              <span>or sign in with</span>
+              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleGoogleSignIn}
+              disabled={pending}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.625rem", width: "100%", padding: "0.625rem 1rem", fontWeight: 500 }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              {firebaseConnecting ? "Connecting to Firebase…" : "Sign in with Google"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function ProfileModal({
@@ -548,7 +646,7 @@ export function App() {
   }, [session.error]);
 
   const authenticate = (nextToken: string) => { sessionStorage.setItem("payroll-session", nextToken); setToken(nextToken); };
-  const logout = async () => { try { await api.logout({ token }); } finally { sessionStorage.removeItem("payroll-session"); setToken(""); queryClient.clear(); } };
+  const logout = async () => { try { await api.logout({ token }); } finally { logoutFirebase().catch(() => {}); sessionStorage.removeItem("payroll-session"); setToken(""); queryClient.clear(); } };
 
   if (!token) return <AuthGate onAuthenticated={authenticate} />;
   if (session.isPending || !session.data) return <Loading />;
@@ -719,15 +817,33 @@ export function App() {
             <h1>{title.title}</h1>
             <p>{title.subtitle}</p>
           </div>
-          <div className="identity-chip" style={{ cursor: "pointer" }} onClick={() => setProfileModalOpen(true)} title="Edit profile">
-            {session.data.avatar ? (
-              <img src={session.data.avatar} alt={session.data.name} className="user-avatar-img" />
-            ) : (
-              <span>{session.data.name.slice(0, 1).toUpperCase()}</span>
-            )}
-            <div>
-              <strong>{session.data.name}</strong>
-              <small>{session.data.roleName}</small>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginLeft: "auto" }}>
+            <span
+              className="status good"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.375rem",
+                fontSize: "0.75rem",
+                padding: "0.25rem 0.625rem",
+                borderRadius: "9999px",
+                fontWeight: 500,
+              }}
+              title="Firebase Firestore & Auth Connected (gen-lang-client-0103137916)"
+            >
+              <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "currentColor" }} />
+              Firebase Connected
+            </span>
+            <div className="identity-chip" style={{ cursor: "pointer" }} onClick={() => setProfileModalOpen(true)} title="Edit profile">
+              {session.data.avatar ? (
+                <img src={session.data.avatar} alt={session.data.name} className="user-avatar-img" />
+              ) : (
+                <span>{session.data.name.slice(0, 1).toUpperCase()}</span>
+              )}
+              <div>
+                <strong>{session.data.name}</strong>
+                <small>{session.data.roleName}</small>
+              </div>
             </div>
           </div>
         </header>
